@@ -1,0 +1,145 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # ── Gate 1: the code is clean, and the next version number ─────────────────
+  # The version is computed with --dry so nothing is tagged yet. Tagging before
+  # the build is what leaves orphan releases behind when a build breaks.
+  checks:
+    name: checks
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.semrel.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26'
+
+      - name: Formatting
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "needs gofmt:"; echo "$unformatted"; exit 1
+          fi
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test -race ./...
+
+      - name: Next version (dry run — tags nothing)
+        id: semrel
+        uses: go-semantic-release/action@v1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          # Tags are bare: 1.2.3, not v1.2.3.
+          custom-arguments: '--provider-opt strip_v_tag_prefix=true'
+          dry: true
+
+  # ── Gate 2: it builds for every machine it has to run on ───────────────────
+  build:
+    name: build
+    needs: checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26'
+
+      - name: Cross-compile the client
+        env:
+          VERSION: ${{ needs.checks.outputs.version || '0.0.0' }}
+        run: |
+          mkdir -p dist
+          for target in linux/amd64 windows/amd64 darwin/arm64 darwin/amd64; do
+            os="${target%/*}"; arch="${target#*/}"
+            out="dist/ffsync-$VERSION-$os-$arch"
+            [ "$os" = "windows" ] && out="$out.exe"
+            GOOS="$os" GOARCH="$arch" go build -trimpath -ldflags="-s -w" -o "$out" ./cmd/ffsync
+          done
+          ls -l dist
+
+      - name: Build the server image
+        run: docker build -t ffxiv-sync:ci .
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: clients
+          path: dist/*
+          retention-days: 1
+
+  # ── Only now is anything tagged, released or published ─────────────────────
+  release:
+    name: release
+    needs: [checks, build]
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      github.event_name != 'pull_request' &&
+      needs.checks.outputs.version != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: main
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: clients
+          path: dist
+
+      - name: Tag and create the release
+        uses: go-semantic-release/action@v1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          custom-arguments: '--provider-opt strip_v_tag_prefix=true'
+          changelog-file: CHANGELOG.md
+
+      - name: Attach the clients
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ needs.checks.outputs.version }}
+          files: dist/*
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # The client and the server ship from one tag, so a machine's binary and
+      # the server it talks to carry the same number.
+      - name: Publish the server image
+        env:
+          VERSION: ${{ needs.checks.outputs.version }}
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+          image=ghcr.io/${{ github.repository_owner }}/ffxiv-sync
+          docker build -t "$image:$VERSION" -t "$image:latest" .
+          docker push "$image:$VERSION"
+          docker push "$image:latest"
+
+      - name: Commit the changelog
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if [ -f CHANGELOG.md ]; then git add CHANGELOG.md; fi
+          git diff --cached --quiet || git commit -m "chore: changelog ${VERSION} [skip ci]"
+          git push
+        env:
+          VERSION: ${{ needs.checks.outputs.version }}

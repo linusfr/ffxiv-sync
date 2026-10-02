@@ -1,0 +1,13 @@
+/dist/
+/ffsync
+/ffsync-server
+
+# A real settings file carries a token; the example in the README is enough.
+config.json
+
+# AI context files
+CLAUDE.md
+AGENTS.md
+
+.vscode/
+.DS_Store
