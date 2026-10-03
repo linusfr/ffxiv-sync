@@ -49,7 +49,8 @@ its flatpak, and XIV on Mac; `game_config` in the settings file overrides it.
 | `store.kind` | `dir` for a folder, `http` for the server |
 | `store.path` | the folder, for `dir` — point it at something Syncthing replicates and no server is needed |
 | `store.url` / `store.token` | the server, for `http`; the token can come from `FFSYNC_TOKEN` instead |
-| `cfg` | moves `FFXIV.cfg` sections between scopes, see below |
+| `cfg` | moves `FFXIV.cfg` sections between scopes — what this machine publishes |
+| `cfg_apply` | which machine-specific sections this machine takes, see below |
 | `plugins` | per-plugin scope, by plugin name |
 | `passphrase` / `passphrase_file` | encrypt everything before it leaves; `FFSYNC_PASSPHRASE` beats both |
 | `max_file_kb` | drops anything larger, default 1024 |
@@ -164,6 +165,19 @@ section can be moved:
 
 `profile` is usually what you want for graphics. A `Section/Key` entry beats a
 whole-section one, so a single setting can be pulled out of its section.
+
+Publishing a machine setting and taking one are separate decisions. A machine
+only writes an incoming graphics, display or input section if it names it:
+
+```json
+"cfg_apply": { "Graphics Settings": true, "Graphics Settings DX11": true }
+```
+
+So two desktops with the same hardware can share a graphics preset while a
+handheld reading the same store keeps its own, without either of them needing a
+profile of its own. Settings that are the player's rather than the machine's —
+sound, cutscenes, UI behaviour — need no such entry; they travel as a matter of
+course.
 
 ## Plugins
 

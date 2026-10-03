@@ -149,3 +149,29 @@ func TestScopedSplitsTheFile(t *testing.T) {
 		t.Error("the default changed")
 	}
 }
+
+// Publishing a machine setting and taking one are separate decisions.
+func TestApplyingNeedsTheReceiversConsent(t *testing.T) {
+	published := Policy{Overrides: map[string]Scope{"Graphics Settings": Profiled}}
+
+	if published.Applies("Graphics Settings", "SSAO") {
+		t.Error("a published graphics setting was applied without being asked for")
+	}
+	if !published.Applies("Sound Settings", "SoundMaster") {
+		t.Error("an ordinary player setting needs asking for, which it should not")
+	}
+
+	accepting := Policy{
+		Overrides: published.Overrides,
+		Accept:    map[string]bool{"Graphics Settings": true},
+	}
+	if !accepting.Applies("Graphics Settings", "SSAO") {
+		t.Error("the receiver asked for graphics and did not get them")
+	}
+
+	// Accepting a section this machine keeps local changes nothing: local wins.
+	stubborn := Policy{Accept: map[string]bool{"Display Settings": true}}
+	if stubborn.Applies("Display Settings", "ScreenWidth") {
+		t.Error("resolution was applied to a machine that keeps it local")
+	}
+}

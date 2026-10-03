@@ -97,6 +97,13 @@ var defaults = map[string][]string{
 // single setting, and are how graphics are opted into sharing.
 type Policy struct {
 	Overrides map[string]Scope
+
+	// Accept gates the receiving end. Publishing a machine setting and taking
+	// one are separate decisions: a desktop can share its graphics preset with
+	// an identical machine while a handheld, reading the same store, keeps its
+	// own. Sections the game writes per machine are only applied to a machine
+	// that has named them here.
+	Accept map[string]bool
 }
 
 // Scope reports how far one setting travels.
@@ -123,6 +130,21 @@ func (p Policy) Scope(section, key string) Scope {
 	}
 
 	return Shared
+}
+
+// Applies reports whether an incoming setting may be written to this machine.
+// Settings that are the player's travel as a matter of course; settings that
+// describe a machine have to be asked for on both ends.
+func (p Policy) Applies(section, key string) bool {
+	if p.Scope(section, key) == Local {
+		return false
+	}
+
+	if _, machineSpecific := defaults[section]; !machineSpecific {
+		return true
+	}
+
+	return p.Accept[section] || p.Accept[section+"/"+key]
 }
 
 // Sections lists what can be overridden, for error messages and documentation.
@@ -227,7 +249,7 @@ func Merge(local, remote *File, policy Policy) *File {
 	order := []string{}
 
 	for _, line := range remote.Lines {
-		if line.Key == "" || policy.Scope(line.Section, line.Key) == Local {
+		if line.Key == "" || !policy.Applies(line.Section, line.Key) {
 			continue
 		}
 

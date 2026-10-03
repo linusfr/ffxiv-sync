@@ -41,8 +41,15 @@ type Config struct {
 	// Cfg moves FFXIV.cfg sections between scopes: "shared" for every machine,
 	// "profile" for machines of the same shape, "local" to keep them here.
 	// Graphics and input hardware are local unless listed. Keys are a section
-	// name, or "Section/Key" for one setting.
+	// name, or "Section/Key" for one setting. This decides what this machine
+	// publishes.
 	Cfg map[string]string `json:"cfg,omitempty"`
+
+	// CfgApply decides what this machine takes. Sections describing a machine —
+	// graphics, display, input hardware — are only written here if named, even
+	// when another machine shares them: two identical desktops can swap a
+	// graphics preset without a handheld reading the same store inheriting it.
+	CfgApply map[string]bool `json:"cfg_apply,omitempty"`
 }
 
 // Store says where the settings live.
@@ -105,7 +112,7 @@ func Load(path string) (*Config, error) {
 // Policy turns the settings file's cfg overrides into something the merge can
 // use, and refuses a scope it does not understand rather than guessing.
 func (c *Config) Policy() (cfg.Policy, error) {
-	policy := cfg.Policy{}
+	policy := cfg.Policy{Accept: c.CfgApply}
 	if len(c.Cfg) == 0 {
 		return policy, nil
 	}

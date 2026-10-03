@@ -165,48 +165,63 @@ func TestDirRefusesSyncConflicts(t *testing.T) {
 	}
 }
 
-// Graphics stay put by default, and travel between machines of the same shape
-// once asked to. A handheld never sees them either way.
-func TestGraphicsTravelOnlyWhenAskedTo(t *testing.T) {
+// Graphics stay put by default. Sharing them takes a decision on both ends: the
+// machine that publishes them, and the machine that applies them.
+func TestGraphicsTravelOnlyWhenBothEndsAgree(t *testing.T) {
 	ctx := context.Background()
+
+	publish := cfg.Policy{Overrides: map[string]cfg.Scope{"Graphics Settings": cfg.Profiled}}
+	both := cfg.Policy{
+		Overrides: publish.Overrides,
+		Accept:    map[string]bool{"Graphics Settings": true},
+	}
 
 	for _, c := range []struct {
 		name     string
-		policy   cfg.Policy
+		sender   cfg.Policy
+		receiver cfg.Policy
 		want     string
-		handheld string
 	}{
-		{"default", cfg.Policy{}, "1920", "1280"},
-		{"opted in", cfg.Policy{Overrides: map[string]cfg.Scope{"Graphics Settings": cfg.Profiled}}, "3840", "1280"},
+		{"off by default", cfg.Policy{}, cfg.Policy{}, "1920"},
+		{"published but not accepted", publish, publish, "1920"},
+		{"agreed on both ends", publish, both, "3840"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			backing := &store.Dir{Root: t.TempDir()}
 
-			tower := Options{Roots: machine(t, "3840", "hotbars", "hud"), Profile: "desktop", Device: "tower", Cfg: c.policy}
+			tower := Options{Roots: machine(t, "3840", "hotbars", "hud"), Profile: "desktop", Device: "tower", Cfg: c.sender}
 			if _, err := Push(ctx, backing, tower); err != nil {
 				t.Fatal(err)
 			}
 
-			laptop := Options{Roots: machine(t, "1920", "hotbars", "hud"), Profile: "desktop", Device: "laptop", Cfg: c.policy, Force: true}
+			laptop := Options{Roots: machine(t, "1920", "hotbars", "hud"), Profile: "desktop", Device: "laptop", Cfg: c.receiver, Force: true}
 			if _, err := Pull(ctx, backing, laptop); err != nil {
 				t.Fatal(err)
 			}
 
-			deck := Options{Roots: machine(t, "1280", "hotbars", "hud"), Profile: "handheld", Device: "deck", Cfg: c.policy, Force: true}
-			if _, err := Pull(ctx, backing, deck); err != nil {
-				t.Fatal(err)
+			got := read(t, filepath.Join(laptop.Roots.GameConfig, "FFXIV.cfg"))
+			if !strings.Contains(got, "SSAO\t"+c.want) {
+				t.Errorf("want SSAO %s, got:\n%s", c.want, got)
 			}
-
-			if got := read(t, filepath.Join(laptop.Roots.GameConfig, "FFXIV.cfg")); !strings.Contains(got, "SSAO\t"+c.want) {
-				t.Errorf("laptop graphics: want SSAO %s, got:\n%s", c.want, got)
-			}
-			if got := read(t, filepath.Join(deck.Roots.GameConfig, "FFXIV.cfg")); !strings.Contains(got, "SSAO\t"+c.handheld) {
-				t.Errorf("handheld graphics: want SSAO %s, got:\n%s", c.handheld, got)
-			}
-			if got := read(t, filepath.Join(laptop.Roots.GameConfig, "FFXIV.cfg")); !strings.Contains(got, "ScreenWidth\t1920") {
-				t.Error("resolution travelled, which it never should")
+			if !strings.Contains(got, "ScreenWidth\t1920") {
+				t.Error("resolution travelled, which it never should without being asked for")
 			}
 		})
+	}
+
+	// A handheld reading the same store never takes the desktops' preset.
+	backing := &store.Dir{Root: t.TempDir()}
+	tower := Options{Roots: machine(t, "3840", "hotbars", "hud"), Profile: "desktop", Device: "tower", Cfg: both}
+	if _, err := Push(ctx, backing, tower); err != nil {
+		t.Fatal(err)
+	}
+
+	deck := Options{Roots: machine(t, "1280", "hotbars", "hud"), Profile: "handheld", Device: "deck", Cfg: both, Force: true}
+	if _, err := Pull(ctx, backing, deck); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(t, filepath.Join(deck.Roots.GameConfig, "FFXIV.cfg")); !strings.Contains(got, "SSAO\t1280") {
+		t.Errorf("a handheld took a desktop's graphics:\n%s", got)
 	}
 }
 
