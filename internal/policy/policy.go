@@ -37,6 +37,11 @@ const (
 	// Repos is for dalamudConfig.json, of which only the custom repository list
 	// travels; the rest of that file is this machine's own state.
 	Repos
+
+	// List is stored and read back for reporting, never written to disk. Which
+	// plugins are enabled is worth knowing on a new machine, but installing
+	// them is Dalamud's job.
+	List
 )
 
 func (a Action) String() string {
@@ -49,6 +54,8 @@ func (a Action) String() string {
 		return "merge"
 	case Repos:
 		return "repos"
+	case List:
+		return "list"
 	default:
 		return "skip"
 	}
@@ -93,6 +100,9 @@ var rules = []rule{
 
 	// Only the repository list, merged into whatever this machine has.
 	{"dalamud/dalamudConfig.json", Repos},
+
+	// Which plugins are enabled, for "ffsync plugins". Never written back.
+	{"dalamud/plugins.json", List},
 
 	// A plugin's settings are JSON, either beside the others or in the
 	// plugin's own directory. Everything else it keeps there — caches, replays,

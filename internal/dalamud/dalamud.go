@@ -6,6 +6,8 @@ package dalamud
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
+	"strings"
 )
 
 // RepoList is the key Dalamud keeps custom repositories under.
@@ -16,6 +18,59 @@ const RepoList = "ThirdRepoList"
 type values struct {
 	Type   string            `json:"$type,omitempty"`
 	Values []json.RawMessage `json:"$values"`
+}
+
+// Profile is the key holding which plugins are enabled.
+const profile = "DefaultProfile"
+
+// Plugin is one entry of that list, minus the per-machine identity: Dalamud
+// generates WorkingPluginId locally, so carrying it between machines would say
+// nothing true about either.
+type Plugin struct {
+	InternalName string `json:"internal_name"`
+	IsEnabled    bool   `json:"is_enabled"`
+}
+
+// Plugins returns which plugins this machine has enabled, for the store's
+// records. It is never written back: a machine installs its own builds, and
+// this only answers "what should be here".
+func Plugins(config []byte) ([]Plugin, error) {
+	var whole map[string]json.RawMessage
+	if err := json.Unmarshal(config, &whole); err != nil {
+		return nil, fmt.Errorf("reading dalamudConfig.json: %w", err)
+	}
+
+	raw, ok := whole[profile]
+	if !ok {
+		return nil, nil
+	}
+
+	var parsed struct {
+		Plugins values `json:"Plugins"`
+	}
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		return nil, fmt.Errorf("reading %s: %w", profile, err)
+	}
+
+	plugins := make([]Plugin, 0, len(parsed.Plugins.Values))
+	for _, entry := range parsed.Plugins.Values {
+		// Dalamud's own field names, which are not the ones this package
+		// stores: the stored list is ours to shape, and drops the per-machine
+		// WorkingPluginId entirely.
+		var raw struct {
+			InternalName string
+			IsEnabled    bool
+		}
+		if err := json.Unmarshal(entry, &raw); err != nil || raw.InternalName == "" {
+			continue
+		}
+
+		plugins = append(plugins, Plugin{InternalName: raw.InternalName, IsEnabled: raw.IsEnabled})
+	}
+
+	sort.Slice(plugins, func(i, j int) bool { return plugins[i].InternalName < plugins[j].InternalName })
+
+	return plugins, nil
 }
 
 // Repos returns just the repository list, which is what gets uploaded.
@@ -129,5 +184,7 @@ func urlOf(raw json.RawMessage) string {
 		return ""
 	}
 
-	return repo.URL
+	// Trimmed: a URL pasted with a leading space is the same repository, and
+	// without this it would be added again on every machine it reaches.
+	return strings.TrimSpace(repo.URL)
 }

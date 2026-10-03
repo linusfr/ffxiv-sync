@@ -79,3 +79,44 @@ func TestMergeWithNothingNewLeavesTheFileAlone(t *testing.T) {
 		t.Error("a merge that changes nothing rewrote the file anyway")
 	}
 }
+
+func TestPluginsDropsPerMachineIds(t *testing.T) {
+	config := []byte(`{"DefaultProfile":{"Plugins":{"$values":[
+		{"InternalName":"BossMod","WorkingPluginId":"64c8cdba-e9ce-4a0e-aae0-bdff6106c810","IsEnabled":true},
+		{"InternalName":"AutoRetainer","WorkingPluginId":"other","IsEnabled":false}]}}}`)
+
+	plugins, err := Plugins(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plugins) != 2 {
+		t.Fatalf("got %d plugins, want 2", len(plugins))
+	}
+	// Sorted, so a push does not churn the blob when Dalamud reorders them.
+	if plugins[0].InternalName != "AutoRetainer" || plugins[1].InternalName != "BossMod" {
+		t.Errorf("not sorted: %+v", plugins)
+	}
+	if plugins[1].IsEnabled != true || plugins[0].IsEnabled != false {
+		t.Errorf("enabled state lost: %+v", plugins)
+	}
+
+	// WorkingPluginId is generated per machine; carrying it would say nothing
+	// true about the machine reading it.
+	stored, _ := json.Marshal(plugins)
+	if strings.Contains(string(stored), "64c8cdba") {
+		t.Error("per-machine plugin id travelled")
+	}
+}
+
+// A repository URL with stray whitespace is the same repository.
+func TestMergeIgnoresWhitespaceInUrls(t *testing.T) {
+	remote := []byte(`{"ThirdRepoList":{"$values":[{"Url":" https://example.com/one.json","IsEnabled":true}]}}`)
+
+	merged, err := Merge([]byte(config), remote)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if Count(merged) != 2 {
+		t.Errorf("%d repositories, want 2 — a padded URL was added again", Count(merged))
+	}
+}

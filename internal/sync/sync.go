@@ -4,6 +4,7 @@ package sync
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"os"
@@ -68,6 +69,7 @@ func (o Options) maxBytes() int64 {
 type File struct {
 	Logical string
 	Key     string
+	Scope   string
 	Action  policy.Action
 	Data    []byte
 	Hash    string
@@ -77,7 +79,22 @@ type File struct {
 // Change is one line of a report.
 type Change struct {
 	Logical string
-	Note    string
+
+	// Scope distinguishes the two halves of a file that is stored twice —
+	// FFXIV.cfg, whose shared and profile parts otherwise appear as the same
+	// path listed twice with no way to tell them apart.
+	Scope string
+
+	Note string
+}
+
+func (c Change) String() string {
+	name := c.Logical
+	if c.Scope != "" {
+		name += " [" + c.Scope + "]"
+	}
+
+	return fmt.Sprintf("  %-56s %s", name, c.Note)
 }
 
 // Report is what a run did, or would have done.
@@ -93,14 +110,25 @@ type Report struct {
 func (r Report) Lines() []string {
 	var out []string
 	for _, change := range r.Changed {
-		out = append(out, fmt.Sprintf("  %-52s %s", change.Logical, change.Note))
+		out = append(out, change.String())
 	}
 	for _, change := range r.Conflicts {
-		out = append(out, fmt.Sprintf("  %-52s CONFLICT: %s", change.Logical, change.Note))
+		out = append(out, Change{Logical: change.Logical, Scope: change.Scope, Note: "CONFLICT: " + change.Note}.String())
 	}
 
 	sort.Strings(out)
 	return out
+}
+
+// Files counts what a run touched as a person would count it: FFXIV.cfg is one
+// file however many halves it is stored in.
+func (r Report) Files() int {
+	seen := map[string]bool{}
+	for _, change := range r.Changed {
+		seen[change.Logical] = true
+	}
+
+	return len(seen)
 }
 
 // root returns the directory a logical path lives under, and whether this
@@ -139,10 +167,11 @@ func Scan(opts Options) ([]File, []Change, error) {
 	var files []File
 	var skipped []Change
 
-	collect := func(logical string, data []byte, modTime time.Time, action policy.Action, key string) {
+	collect := func(logical string, data []byte, modTime time.Time, action policy.Action, key, scope string) {
 		files = append(files, File{
 			Logical: logical,
 			Key:     key,
+			Scope:   scope,
 			Action:  action,
 			Data:    data,
 			Hash:    manifest.Hash(data),
@@ -226,23 +255,13 @@ func Scan(opts Options) ([]File, []Change, error) {
 						where = policy.Profile
 					}
 					part := parsed.Scoped(opts.Cfg, scope).Bytes()
-					collect(logical, part, info.ModTime().UTC(), action, manifest.Key(logical, where, opts.Profile))
+					collect(logical, part, info.ModTime().UTC(), action,
+						manifest.Key(logical, where, opts.Profile), scope.String())
 				}
-
-			case policy.Repos:
-				repos, err := dalamud.Repos(data)
-				if err != nil {
-					return err
-				}
-				if repos == nil {
-					return nil
-				}
-				collect(logical, repos, info.ModTime().UTC(), action,
-					manifest.Key(logical, policy.Sync, opts.Profile))
 
 			default:
 				collect(logical, data, info.ModTime().UTC(), action,
-					manifest.Key(logical, action, opts.Profile))
+					manifest.Key(logical, action, opts.Profile), "")
 			}
 
 			return nil
@@ -271,10 +290,37 @@ func Scan(opts Options) ([]File, []Change, error) {
 			if err != nil {
 				return nil, skipped, err
 			}
-			if repos != nil {
-				logical := policy.Dalamud + "/dalamudConfig.json"
+
+			logical := policy.Dalamud + "/dalamudConfig.json"
+			switch {
+			case repos == nil || dalamud.Count(repos) == 0:
+				// A Dalamud that has just been installed writes a config with
+				// no custom repositories. Pushing that would wipe the real list
+				// for every other machine, so an empty one never travels.
+				skipped = append(skipped, Change{
+					Logical: logical,
+					Note:    "no custom repositories here yet; not overwriting the stored list",
+				})
+			default:
 				collect(logical, repos, info.ModTime().UTC(), policy.Repos,
-					manifest.Key(logical, policy.Sync, opts.Profile))
+					manifest.Key(logical, policy.Sync, opts.Profile), "")
+			}
+
+			// Which plugins are enabled, stored for "ffsync plugins" and never
+			// written back to any machine.
+			plugins, err := dalamud.Plugins(data)
+			if err != nil {
+				return nil, skipped, err
+			}
+			if len(plugins) > 0 {
+				listed, err := json.MarshalIndent(plugins, "", "  ")
+				if err != nil {
+					return nil, skipped, err
+				}
+
+				name := policy.Dalamud + "/plugins.json"
+				collect(name, listed, info.ModTime().UTC(), policy.List,
+					manifest.Key(name, policy.Sync, opts.Profile), "")
 			}
 		}
 	}
@@ -324,6 +370,7 @@ func Push(ctx context.Context, s store.Store, opts Options) (Report, error) {
 		case known && !opts.Force && existing.ModTime.After(file.ModTime):
 			report.Conflicts = append(report.Conflicts, Change{
 				Logical: file.Logical,
+				Scope:   file.Scope,
 				Note: fmt.Sprintf("store has a newer copy from %s (%s)",
 					existing.Device, existing.ModTime.Local().Format(time.RFC822)),
 			})
@@ -334,7 +381,7 @@ func Push(ctx context.Context, s store.Store, opts Options) (Report, error) {
 		if known {
 			note = "updated"
 		}
-		report.Changed = append(report.Changed, Change{Logical: file.Logical, Note: note})
+		report.Changed = append(report.Changed, Change{Logical: file.Logical, Scope: file.Scope, Note: note})
 
 		stored := file.Data
 		if sealer != nil {
@@ -425,6 +472,20 @@ func Pull(ctx context.Context, s store.Store, opts Options) (Report, error) {
 			continue
 		}
 
+		// Stored for reporting only: "ffsync plugins" reads it, nothing writes
+		// it to disk.
+		if policy.For(logical) == policy.List {
+			continue
+		}
+
+		scope := ""
+		if policy.For(logical) == policy.Merge {
+			scope = cfg.Shared.String()
+			if _, profiled := manifest.CutProfile(key, opts.Profile); profiled {
+				scope = cfg.Profiled.String()
+			}
+		}
+
 		have, exists := local[key]
 		if exists && have.Hash == entry.Hash {
 			report.Unchanged++
@@ -436,6 +497,7 @@ func Pull(ctx context.Context, s store.Store, opts Options) (Report, error) {
 		if exists && !opts.Force && have.ModTime.After(entry.ModTime) {
 			report.Conflicts = append(report.Conflicts, Change{
 				Logical: logical,
+				Scope:   scope,
 				Note:    "changed here after the store's copy; push, or pull --force",
 			})
 			continue
@@ -445,7 +507,7 @@ func Pull(ctx context.Context, s store.Store, opts Options) (Report, error) {
 		if !exists {
 			note = "new"
 		}
-		report.Changed = append(report.Changed, Change{Logical: logical, Note: note})
+		report.Changed = append(report.Changed, Change{Logical: logical, Scope: scope, Note: note})
 		if opts.DryRun {
 			continue
 		}
@@ -512,4 +574,60 @@ func write(opts Options, logical string, data []byte, backed map[string]bool) er
 	}
 
 	return os.WriteFile(target, data, 0o644)
+}
+
+// StoredPlugins returns the enabled-plugin list the store holds, which is what
+// a machine joining an existing store compares itself against.
+func StoredPlugins(ctx context.Context, s store.Store, opts Options) ([]dalamud.Plugin, error) {
+	remote, err := s.Current(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	key := manifest.Key(policy.Dalamud+"/plugins.json", policy.Sync, opts.Profile)
+	entry, ok := remote.Entries[key]
+	if !ok {
+		return nil, nil
+	}
+
+	stored, err := s.Blob(ctx, entry.Stored())
+	if err != nil {
+		return nil, err
+	}
+
+	data, err := crypt.NewOpener(opts.Passphrase).Open(stored)
+	if err != nil {
+		return nil, err
+	}
+
+	var plugins []dalamud.Plugin
+	if err := json.Unmarshal(data, &plugins); err != nil {
+		return nil, err
+	}
+
+	return plugins, nil
+}
+
+// Installed lists the plugins Dalamud has on this machine.
+func Installed(opts Options) (map[string]bool, error) {
+	installed := map[string]bool{}
+	if opts.Roots.InstalledPlugins == "" {
+		return installed, nil
+	}
+
+	entries, err := os.ReadDir(opts.Roots.InstalledPlugins)
+	if os.IsNotExist(err) {
+		return installed, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() {
+			installed[entry.Name()] = true
+		}
+	}
+
+	return installed, nil
 }

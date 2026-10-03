@@ -24,6 +24,7 @@ it on `PATH`. Then:
 ```sh
 ffsync init      # writes a starter config, prints where
 ffsync status    # shows what was detected and what each direction would do
+ffsync plugins   # which plugins the store expects that this machine lacks
 ```
 
 The config directory is found automatically for XIVLauncher, XIVLauncher.Core,
@@ -98,21 +99,34 @@ ffsync push
 
 ### Windows
 
-`ffxiv.bat`, pinned wherever the launcher shortcut used to be:
+`ffxiv.bat`:
 
 ```bat
 @echo off
-ffsync pull || exit /b 1
-start "" "%LOCALAPPDATA%\XIVLauncher\XIVLauncher.exe"
+setlocal
+set FFSYNC=%LOCALAPPDATA%\ffsync\ffsync.exe
+
+"%FFSYNC%" pull || echo ffsync: pull failed, starting anyway
+
+start "" "%LOCALAPPDATA%\XIVLauncher\current\XIVLauncher.exe"
 
 :wait
 timeout /t 15 >nul
+tasklist /fi "imagename eq XIVLauncher.exe" | find /i "XIVLauncher.exe" >nul && goto wait
 tasklist /fi "imagename eq ffxiv_dx11.exe" | find /i "ffxiv_dx11.exe" >nul && goto wait
-ffsync push
+
+"%FFSYNC%" push || pause
 ```
 
-The wait loops exist because XIVLauncher closes itself once the game is up;
-pushing at that moment would upload the settings from the *previous* session.
+Three things that bite here. The launcher is behind `current\` on Velopack
+installs. The loop has to watch *both* processes, or a slow login, an OTP prompt
+or a patch means the game is not up at the first check and the push happens
+before the session. And `ffsync.exe` is called by full path, because a shortcut
+launched from Explorer may not see a freshly changed `PATH`.
+
+A `.bat` cannot be pinned to the taskbar. Make a shortcut with target
+`cmd.exe /c "…\ffxiv.bat"`, set it to start minimised, give it XIVLauncher's
+icon, and pin that from the Start Menu.
 
 ## What travels
 
@@ -185,6 +199,28 @@ export FFSYNC_PASSPHRASE='...'   # or passphrase_file in the settings
 AES-256-GCM, key derived with PBKDF2-SHA256 once per run. Every machine needs
 the same passphrase; a store written without one keeps working.
 
+## Joining a store from a new machine
+
+In this order, or the first sync will fight you:
+
+1. **Start the game once with Dalamud enabled.** Until Dalamud has written
+   `dalamudConfig.json` there is nothing to merge repositories into, and
+   `ffsync status` will say so rather than claiming the launcher is missing.
+2. **Pull before you push.** A fresh Dalamud has no custom repositories, and
+   pushing that would be an empty list landing on every other machine. ffsync
+   refuses to push an empty repository list for exactly this reason, but the
+   rest of a fresh config is still yours to lose.
+3. **Expect conflicts on that first pull.** That game start rewrote `FFXIV.cfg`
+   and `dalamudConfig.json`, so their local copies are newer than the store's.
+   `ffsync pull --force` takes the store's side; what it replaces is kept as
+   `<name>.ffsync-bak`.
+4. **`ffsync plugins`** lists what the store expects and this machine lacks.
+   Install those from Dalamud's installer — the repositories they come from
+   have already arrived, and their settings are waiting.
+5. **Plugins with their own data directories need their own setup.** Penumbra is
+   the one to watch: its mod root is machine-specific and deliberately not
+   synced, so until you set one, Penumbra and anything built on it do nothing.
+
 ## Conflicts
 
 A push whose local copy is older than the store's is reported, not sent; a pull
@@ -194,6 +230,11 @@ replaces is kept alongside it as `<name>.ffsync-bak`.
 
 Two machines pushing from the same generation is caught by the store: the second
 one is told to pull first.
+
+A push only ever adds or updates. Deleting a file here does not delete it from
+the store, so a plugin you removed long ago still has its settings carried
+around — harmless, since nothing reads them, but `ffsync plugins` is where you
+see which plugins are actually expected.
 
 ## Server (optional)
 

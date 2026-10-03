@@ -323,3 +323,90 @@ func TestEncryptedStore(t *testing.T) {
 		t.Error("the wrong passphrase was accepted")
 	}
 }
+
+// A freshly installed Dalamud has no custom repositories. Pushing that would
+// wipe the list for every other machine.
+func TestEmptyRepoListIsNotPushed(t *testing.T) {
+	ctx := context.Background()
+	backing := &store.Dir{Root: t.TempDir()}
+
+	withConfig := func(t *testing.T, repos string) Options {
+		roots := machine(t, "1920", "hotbars", "hud")
+		dir := t.TempDir()
+		writeFixture(t, filepath.Join(dir, "dalamudConfig.json"),
+			`{"DoPluginTest":false,"ThirdRepoList":{"$values":[`+repos+`]},`+
+				`"DefaultProfile":{"Plugins":{"$values":[{"InternalName":"BossMod","IsEnabled":true}]}}}`)
+		writeFixture(t, filepath.Join(dir, "pluginConfigs", "BossMod.json"), `{"mark":"x"}`)
+
+		roots.PluginConfigs = filepath.Join(dir, "pluginConfigs")
+		roots.DalamudConfig = filepath.Join(dir, "dalamudConfig.json")
+
+		return Options{Roots: roots, Profile: "desktop", Device: "tower", Force: true}
+	}
+
+	full := withConfig(t, `{"Url":"https://example.com/one.json","IsEnabled":true}`)
+	if _, err := Push(ctx, backing, full); err != nil {
+		t.Fatal(err)
+	}
+
+	fresh := withConfig(t, "")
+	fresh.Device = "newmachine"
+	report, err := Push(ctx, backing, fresh)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	found := false
+	for _, change := range report.Skipped {
+		if strings.Contains(change.Logical, "dalamudConfig.json") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("an empty repository list was pushed; skipped: %v", report.Skipped)
+	}
+
+	// And the stored list still has the repository in it.
+	current, err := backing.Current(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := current.Entries["shared/dalamud/dalamudConfig.json"]; !ok {
+		t.Error("the stored repository list went missing")
+	}
+
+	// The plugin list is stored but never written back to a machine.
+	if _, ok := current.Entries["shared/dalamud/plugins.json"]; !ok {
+		t.Fatal("the plugin list was not stored")
+	}
+	plugins, err := StoredPlugins(ctx, backing, fresh)
+	if err != nil || len(plugins) != 1 || plugins[0].InternalName != "BossMod" {
+		t.Fatalf("stored plugins = %+v, err %v", plugins, err)
+	}
+
+	target := Options{Roots: machine(t, "1280", "other", "hud"), Profile: "handheld", Device: "deck", Force: true}
+	if _, err := Pull(ctx, backing, target); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(target.Roots.GameConfig, "plugins.json")); err == nil {
+		t.Error("the plugin list was written to disk")
+	}
+}
+
+// FFXIV.cfg is stored in two halves but is one file to a person.
+func TestReportCountsFilesNotBlobs(t *testing.T) {
+	report := Report{Changed: []Change{
+		{Logical: "game/FFXIV.cfg", Scope: "shared", Note: "new"},
+		{Logical: "game/FFXIV.cfg", Scope: "profile", Note: "new"},
+		{Logical: "game/MACROSYS.dat", Note: "new"},
+	}}
+
+	if report.Files() != 2 {
+		t.Errorf("Files() = %d, want 2", report.Files())
+	}
+	for _, line := range report.Lines() {
+		if strings.Contains(line, "FFXIV.cfg") && !strings.Contains(line, "[") {
+			t.Errorf("the two halves are indistinguishable: %q", line)
+		}
+	}
+}

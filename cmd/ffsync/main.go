@@ -22,6 +22,7 @@ const usage = `ffsync — carry FFXIV settings between machines
   ffsync pull      take the store's settings (run before the game starts)
   ffsync push      send this machine's settings (run after the game exits)
   ffsync status    what is where, and what each direction would do
+  ffsync plugins   which plugins the store expects that this machine lacks
   ffsync init      write a starter config
 
 Flags:
@@ -53,6 +54,17 @@ func run() error {
 	if command == "" {
 		flags.Usage()
 		return fmt.Errorf("no command given")
+	}
+
+	// Flags after the command too: "ffsync pull --force" is what the conflict
+	// message tells people to run, and Go's flag package stops at the first
+	// argument that is not one.
+	if err := flags.Parse(flags.Args()[1:]); err != nil {
+		return err
+	}
+	if flags.NArg() > 0 {
+		flags.Usage()
+		return fmt.Errorf("unexpected argument %q", flags.Arg(0))
 	}
 
 	path := *configPath
@@ -120,6 +132,8 @@ func run() error {
 		return report("pushed", result, err)
 	case "status":
 		return status(ctx, backing, settings, options)
+	case "plugins":
+		return plugins(ctx, backing, options)
 	default:
 		flags.Usage()
 		return fmt.Errorf("unknown command %q", command)
@@ -170,8 +184,8 @@ func report(verb string, result sync.Report, err error) error {
 		fmt.Println(line)
 	}
 
-	fmt.Printf("%s: %d changed, %d unchanged, %d conflicts, %d skipped, generation %d\n",
-		verb, len(result.Changed), result.Unchanged, len(result.Conflicts), len(result.Skipped), result.Generation)
+	fmt.Printf("%s: %d file(s) changed, %d unchanged, %d conflicts, %d skipped, generation %d\n",
+		verb, result.Files(), result.Unchanged, len(result.Conflicts), len(result.Skipped), result.Generation)
 
 	if len(result.Conflicts) > 0 {
 		return fmt.Errorf("%d conflicts left alone; resolve them or use --force", len(result.Conflicts))
@@ -184,8 +198,8 @@ func status(ctx context.Context, backing store.Store, settings *config.Config, o
 	fmt.Printf("device   %s (profile %s)\n", settings.Device, settings.Profile)
 	fmt.Printf("game     %s\n", options.Roots.GameConfig)
 
-	if options.Roots.PluginConfigs == "" {
-		fmt.Println("dalamud  not found; plugin settings and repositories are not syncing")
+	if options.Roots.DalamudConfig == "" {
+		fmt.Printf("dalamud  %s\n", options.Roots.DalamudHint)
 	} else {
 		fmt.Printf("dalamud  %s\n", options.Roots.DalamudConfig)
 	}
@@ -221,13 +235,70 @@ func status(ctx context.Context, backing store.Store, settings *config.Config, o
 		return err
 	}
 
-	fmt.Printf("\npull would change %d file(s):\n", len(pull.Changed))
+	// Both directions scan, so each would report the same skipped file.
+	for _, change := range pull.Skipped {
+		fmt.Printf("skipped  %s: %s\n", change.Logical, change.Note)
+	}
+
+	fmt.Printf("\npull would change %d file(s):\n", pull.Files())
 	for _, line := range pull.Lines() {
 		fmt.Println(line)
 	}
-	fmt.Printf("push would change %d file(s):\n", len(push.Changed))
+	fmt.Printf("push would change %d file(s):\n", push.Files())
 	for _, line := range push.Lines() {
 		fmt.Println(line)
+	}
+
+	return nil
+}
+
+// Plugins answers the question a machine joining an existing store has: what is
+// supposed to be installed here. The plugins themselves are never synced — each
+// machine fetches its own builds from the repositories, which do sync.
+func plugins(ctx context.Context, backing store.Store, options sync.Options) error {
+	stored, err := sync.StoredPlugins(ctx, backing, options)
+	if err != nil {
+		return err
+	}
+	if len(stored) == 0 {
+		return fmt.Errorf("the store has no plugin list yet; push from a machine that has Dalamud set up")
+	}
+
+	installed, err := sync.Installed(options)
+	if err != nil {
+		return err
+	}
+
+	var missing, disabled []string
+	for _, plugin := range stored {
+		switch {
+		case !installed[plugin.InternalName] && plugin.IsEnabled:
+			missing = append(missing, plugin.InternalName)
+		case !installed[plugin.InternalName]:
+			disabled = append(disabled, plugin.InternalName)
+		}
+	}
+
+	fmt.Printf("stored list: %d plugins, %d installed here\n", len(stored), len(installed))
+
+	if len(missing) > 0 {
+		fmt.Printf("\nmissing (enabled elsewhere): %d\n", len(missing))
+		for _, name := range missing {
+			fmt.Println("  " + name)
+		}
+		fmt.Println("\nInstall them from Dalamud's plugin installer — the custom repositories")
+		fmt.Println("they come from are already synced. Their settings are waiting too.")
+	}
+
+	if len(disabled) > 0 {
+		fmt.Printf("\nmissing, but switched off where the list came from: %d\n", len(disabled))
+		for _, name := range disabled {
+			fmt.Println("  " + name)
+		}
+	}
+
+	if len(missing) == 0 && len(disabled) == 0 {
+		fmt.Println("nothing missing.")
 	}
 
 	return nil

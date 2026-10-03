@@ -23,6 +23,15 @@ type Roots struct {
 	// DalamudConfig is the file holding Dalamud's own settings, of which only
 	// the custom repository list travels.
 	DalamudConfig string
+
+	// InstalledPlugins is where Dalamud keeps the plugins themselves. It is
+	// never synced — each machine fetches its own builds — but it is what
+	// "ffsync plugins" compares the stored list against.
+	InstalledPlugins string
+
+	// DalamudHint explains an empty DalamudConfig, which has two very different
+	// causes: no launcher at all, or a launcher that has never run the game.
+	DalamudHint string
 }
 
 // ErrNotFound means no known layout matched; the user has to say where it is.
@@ -44,12 +53,27 @@ func Detect() (Roots, error) {
 		return roots, ErrNotFound
 	}
 
+	roots.DalamudHint = "no XIVLauncher found; plugin settings and repositories are not syncing"
 	for _, candidate := range dalamudCandidates() {
-		if exists(filepath.Join(candidate, "dalamudConfig.json")) {
-			roots.PluginConfigs = filepath.Join(candidate, "pluginConfigs")
-			roots.DalamudConfig = filepath.Join(candidate, "dalamudConfig.json")
-			break
+		if !isDir(candidate) {
+			continue
 		}
+
+		// The launcher directory exists but Dalamud has never written its
+		// config, which is what a fresh install looks like. Saying "not found"
+		// there sends people hunting for a path that is already right.
+		if !exists(filepath.Join(candidate, "dalamudConfig.json")) {
+			roots.DalamudHint = candidate +
+				" exists, but Dalamud has no config yet — start the game once with Dalamud enabled"
+			continue
+		}
+
+		roots.PluginConfigs = filepath.Join(candidate, "pluginConfigs")
+		roots.DalamudConfig = filepath.Join(candidate, "dalamudConfig.json")
+		roots.InstalledPlugins = filepath.Join(candidate, "installedPlugins")
+		roots.DalamudHint = ""
+
+		break
 	}
 
 	return roots, nil
@@ -123,4 +147,9 @@ func dalamudCandidates() []string {
 func exists(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && !info.IsDir()
+}
+
+func isDir(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
 }
