@@ -1,10 +1,10 @@
-## 1.0.1 (2026-10-03)
+## 1.1.0 (2026-10-03)
 
-#### Bug Fixes
+#### Feature
 
-* honour flags after the subcommand, and guard the repo list (17b3d447)
+* ask both ends before applying machine settings (46b5fd02)
 
 #### Chores
 
-* changelog 1.0.0 [skip ci] (1b38c527)
+* changelog 1.0.1 [skip ci] (063cdbcf)
 
