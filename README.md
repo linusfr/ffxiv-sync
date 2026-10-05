@@ -136,7 +136,7 @@ icon, and pin that from the Start Menu.
 | Shared | hotbars, macros, gearsets, item order, chat log filters, plugin settings |
 | Per profile | HUD layout, keybinds, controller bindings, character common settings |
 | Merged | `FFXIV.cfg` key by key, and Dalamud's custom repository list |
-| Never | resolution, graphics, mouse and gamepad hardware settings, login state, plugin caches, replays, databases and logs, the game's own backups |
+| Never | resolution, graphics, mouse and gamepad hardware settings, login state, plugin caches, replays, databases and logs, Penumbra's settings, the game's own backups |
 
 `FFXIV.cfg` is one text file holding every kind of setting, so it is merged
 rather than copied: the store only receives the keys that travel, and a pull
@@ -187,8 +187,14 @@ replays, databases, logs, lock files — stays on the machine; on this one that 
 the difference between 500 KB and 1.2 GB. Anything over `max_file_kb` is skipped
 and reported either way.
 
-Plugins are shared by default. One whose settings are about the screen rather
-than the player can be moved:
+Plugins are shared by default, with one exception: **Penumbra stays local**. Its
+settings are a mod root path and collection ids generated per installation, and
+copying them points another machine's Default and Interface collections at ids
+it has never seen — which Penumbra reads as "None" and quietly switches every UI
+mod off. Name it in `plugins` if you want it anyway.
+
+One whose settings are about the screen rather than the player can be moved the
+same way:
 
 ```json
 "plugins": { "MinimalMeter": "profile", "Browsingway": "local" }
@@ -228,12 +234,28 @@ In this order, or the first sync will fight you:
    and `dalamudConfig.json`, so their local copies are newer than the store's.
    `ffsync pull --force` takes the store's side; what it replaces is kept as
    `<name>.ffsync-bak`.
-4. **`ffsync plugins`** lists what the store expects and this machine lacks.
+4. **`ffsync plugins`** lists what other machines run and this one lacks;
+   `--all` shows every plugin and which machine lists it. Each machine stores
+   its own list, so they can differ without overwriting each other.
    Install those from Dalamud's installer — the repositories they come from
    have already arrived, and their settings are waiting.
 5. **Plugins with their own data directories need their own setup.** Penumbra is
    the one to watch: its mod root is machine-specific and deliberately not
    synced, so until you set one, Penumbra and anything built on it do nothing.
+
+## Windows: a trap worth knowing
+
+Packaged (MSIX/Store) applications — including Claude Desktop — redirect
+everything they and their child processes write under `%AppData%` and
+`%LOCALAPPDATA%` into a private per-package folder. Installed from inside such an
+app, ffsync, its config and the wrapper all appear to exist and are invisible to
+Explorer, PowerShell and the Start Menu shortcut. Installing to
+`%USERPROFILE%\ffsync` avoids it entirely; otherwise do the install from an
+ordinary PowerShell.
+
+The wrapper also only helps if it is what you actually launch. Replace the
+XIVLauncher shortcut you use with the one pointing at `ffxiv.bat` — starting the
+launcher directly means nothing pushes when you are done.
 
 ## Conflicts
 

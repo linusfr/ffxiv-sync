@@ -158,8 +158,20 @@ func (o Options) pluginScope(logical string) cfg.Scope {
 	if scope, ok := o.Plugins[name]; ok {
 		return scope
 	}
+	if scope, ok := machineSpecificPlugins[name]; ok {
+		return scope
+	}
 
 	return cfg.Shared
+}
+
+// machineSpecificPlugins keep their settings at home unless the config says
+// otherwise. Penumbra's are a mod root path and collection GUIDs that are
+// generated per installation: carrying them sets another machine's Default and
+// Interface collections to identifiers it has never seen, which reads as "None"
+// and silently switches every UI mod off.
+var machineSpecificPlugins = map[string]cfg.Scope{
+	"Penumbra": cfg.Local,
 }
 
 // Scan reads every file the policy has an opinion about.
@@ -320,7 +332,7 @@ func Scan(opts Options) ([]File, []Change, error) {
 
 				name := policy.Dalamud + "/plugins.json"
 				collect(name, listed, info.ModTime().UTC(), policy.List,
-					manifest.Key(name, policy.Sync, opts.Profile), "")
+					manifest.DeviceKey(name, opts.Device), "")
 			}
 		}
 	}
@@ -457,6 +469,8 @@ func Pull(ctx context.Context, s store.Store, opts Options) (Report, error) {
 			logical, mine = manifest.CutProfile(key, opts.Profile)
 		}
 		if !mine {
+			// Per-device records describe a machine; they are read by
+			// "ffsync plugins", never copied onto anybody.
 			continue
 		}
 
@@ -525,10 +539,15 @@ func Pull(ctx context.Context, s store.Store, opts Options) (Report, error) {
 			return report, fmt.Errorf("%s: the store's copy does not match its hash", logical)
 		}
 
-		if err := write(opts, logical, data, backed); err != nil {
+		applied, err := write(opts, logical, data, backed)
+		if err != nil {
 			return report, fmt.Errorf("%s: %w", logical, err)
 		}
 		backed[logical] = true
+
+		if len(applied) > 0 {
+			report.Changed[len(report.Changed)-1].Note = note + ": " + strings.Join(applied, ", ")
+		}
 	}
 
 	return report, nil
@@ -537,75 +556,88 @@ func Pull(ctx context.Context, s store.Store, opts Options) (Report, error) {
 // Write puts one file on disk, keeping a copy of what it replaced. FFXIV.cfg
 // and dalamudConfig.json are merged rather than replaced, so this machine keeps
 // its own resolution and its own plugin bookkeeping.
-func write(opts Options, logical string, data []byte, backed map[string]bool) error {
+func write(opts Options, logical string, data []byte, backed map[string]bool) ([]string, error) {
 	target, ok := opts.root(logical)
 	if !ok {
-		return fmt.Errorf("nowhere to put it on this machine")
+		return nil, fmt.Errorf("nowhere to put it on this machine")
 	}
 
 	current, err := os.ReadFile(target)
 	if err != nil && !os.IsNotExist(err) {
-		return err
+		return nil, err
 	}
+
+	// What the write actually changes, so a report can say "the graphics did
+	// arrive" rather than leaving it to a diff against the backup.
+	var applied []string
 
 	switch policy.For(logical) {
 	case policy.Merge:
-		data = cfg.Merge(cfg.Parse(current), cfg.Parse(data), opts.Cfg).Bytes()
+		local, incoming := cfg.Parse(current), cfg.Parse(data)
+		applied = cfg.Changed(local, incoming, opts.Cfg)
+		data = cfg.Merge(local, incoming, opts.Cfg).Bytes()
 
 	case policy.Repos:
 		// Nothing to merge into means Dalamud has never run here; writing a
 		// config that is only a repository list would lose it the rest.
 		if len(current) == 0 {
-			return nil
+			return nil, nil
 		}
 		if data, err = dalamud.Merge(current, data); err != nil {
-			return err
+			return nil, err
 		}
 	}
 
 	if len(current) > 0 && !backed[logical] {
 		if err := os.WriteFile(target+".ffsync-bak", current, 0o644); err != nil {
-			return err
+			return nil, err
 		}
 	}
 
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-		return err
+		return nil, err
 	}
 
-	return os.WriteFile(target, data, 0o644)
+	return applied, os.WriteFile(target, data, 0o644)
 }
 
-// StoredPlugins returns the enabled-plugin list the store holds, which is what
-// a machine joining an existing store compares itself against.
-func StoredPlugins(ctx context.Context, s store.Store, opts Options) ([]dalamud.Plugin, error) {
+// StoredPlugins returns every machine's enabled-plugin list, keyed by device.
+// Each machine stores its own: the lists differ on purpose, and a single shared
+// one would just be whichever machine pushed last.
+func StoredPlugins(ctx context.Context, s store.Store, opts Options) (map[string][]dalamud.Plugin, error) {
 	remote, err := s.Current(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	key := manifest.Key(policy.Dalamud+"/plugins.json", policy.Sync, opts.Profile)
-	entry, ok := remote.Entries[key]
-	if !ok {
-		return nil, nil
+	opener := crypt.NewOpener(opts.Passphrase)
+	lists := map[string][]dalamud.Plugin{}
+
+	for key, entry := range remote.Entries {
+		device, logical, ok := manifest.CutDevice(key)
+		if !ok || logical != policy.Dalamud+"/plugins.json" {
+			continue
+		}
+
+		stored, err := s.Blob(ctx, entry.Stored())
+		if err != nil {
+			return nil, err
+		}
+
+		data, err := opener.Open(stored)
+		if err != nil {
+			return nil, err
+		}
+
+		var plugins []dalamud.Plugin
+		if err := json.Unmarshal(data, &plugins); err != nil {
+			return nil, err
+		}
+
+		lists[device] = plugins
 	}
 
-	stored, err := s.Blob(ctx, entry.Stored())
-	if err != nil {
-		return nil, err
-	}
-
-	data, err := crypt.NewOpener(opts.Passphrase).Open(stored)
-	if err != nil {
-		return nil, err
-	}
-
-	var plugins []dalamud.Plugin
-	if err := json.Unmarshal(data, &plugins); err != nil {
-		return nil, err
-	}
-
-	return plugins, nil
+	return lists, nil
 }
 
 // Installed lists the plugins Dalamud has on this machine.

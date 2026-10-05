@@ -288,6 +288,41 @@ func Merge(local, remote *File, policy Policy) *File {
 	return merged
 }
 
+// Changed names the sections an incoming file would actually alter. A pull that
+// says "written" otherwise leaves no way to tell a graphics preset that was
+// applied from one that happened to be identical already.
+func Changed(local, remote *File, policy Policy) []string {
+	current := map[string]string{}
+	for _, line := range local.Lines {
+		if line.Key != "" {
+			current[line.Section+"\x00"+line.Key] = line.Value
+		}
+	}
+
+	seen := map[string]bool{}
+	var sections []string
+
+	for _, line := range remote.Lines {
+		if line.Key == "" || !policy.Applies(line.Section, line.Key) {
+			continue
+		}
+
+		if value, ok := current[line.Section+"\x00"+line.Key]; ok && value == line.Value {
+			continue
+		}
+		if seen[line.Section] {
+			continue
+		}
+
+		seen[line.Section] = true
+		sections = append(sections, line.Section)
+	}
+
+	sort.Strings(sections)
+
+	return sections
+}
+
 // Insert puts a setting at the end of its section, creating the section if the
 // local file does not have it.
 func (f *File) insert(section, key, value string) {

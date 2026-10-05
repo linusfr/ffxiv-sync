@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 
 	"github.com/linusfr/ffxiv-sync/internal/config"
 	"github.com/linusfr/ffxiv-sync/internal/layout"
@@ -23,6 +25,7 @@ const usage = `ffsync — carry FFXIV settings between machines
   ffsync push      send this machine's settings (run after the game exits)
   ffsync status    what is where, and what each direction would do
   ffsync plugins   which plugins the store expects that this machine lacks
+                   (--all for every plugin and which machine lists it)
   ffsync init      write a starter config
 
 Flags:
@@ -45,6 +48,7 @@ func run() error {
 	configPath := flags.String("config", "", "settings file")
 	force := flags.Bool("force", false, "take this side in a conflict")
 	dryRun := flags.Bool("dry-run", false, "change nothing")
+	all := flags.Bool("all", false, "with plugins: every plugin and where it is")
 
 	if err := flags.Parse(os.Args[1:]); err != nil {
 		return err
@@ -126,14 +130,14 @@ func run() error {
 	switch command {
 	case "pull":
 		result, err := sync.Pull(ctx, backing, options)
-		return report("pulled", result, err)
+		return report("pulled", *dryRun, result, err)
 	case "push":
 		result, err := sync.Push(ctx, backing, options)
-		return report("pushed", result, err)
+		return report("pushed", *dryRun, result, err)
 	case "status":
 		return status(ctx, backing, settings, options)
 	case "plugins":
-		return plugins(ctx, backing, options)
+		return plugins(ctx, backing, options, *all)
 	default:
 		flags.Usage()
 		return fmt.Errorf("unknown command %q", command)
@@ -175,9 +179,12 @@ func open(settings *config.Config) (store.Store, error) {
 	}
 }
 
-func report(verb string, result sync.Report, err error) error {
+func report(verb string, dryRun bool, result sync.Report, err error) error {
 	if err != nil {
 		return err
+	}
+	if dryRun {
+		verb = "would " + strings.TrimSuffix(verb, "ed")
 	}
 
 	for _, line := range result.Lines() {
@@ -214,7 +221,12 @@ func status(ctx context.Context, backing store.Store, settings *config.Config, o
 	fmt.Printf("store    %s %s\n", settings.Store.Kind, where)
 
 	if len(settings.Cfg) > 0 {
-		fmt.Printf("cfg      %v\n", settings.Cfg)
+		fmt.Printf("cfg      shares %v\n", settings.Cfg)
+	}
+	if len(settings.CfgApply) > 0 {
+		fmt.Printf("cfg      applies %v\n", applied(settings.CfgApply))
+	} else {
+		fmt.Println("cfg      applies nothing machine-specific; set cfg_apply to take graphics or input settings")
 	}
 
 	current, err := backing.Current(ctx)
@@ -254,13 +266,14 @@ func status(ctx context.Context, backing store.Store, settings *config.Config, o
 
 // Plugins answers the question a machine joining an existing store has: what is
 // supposed to be installed here. The plugins themselves are never synced — each
-// machine fetches its own builds from the repositories, which do sync.
-func plugins(ctx context.Context, backing store.Store, options sync.Options) error {
-	stored, err := sync.StoredPlugins(ctx, backing, options)
+// machine fetches its own builds from the repositories, which do sync — so every
+// machine stores its own list and this compares them.
+func plugins(ctx context.Context, backing store.Store, options sync.Options, all bool) error {
+	lists, err := sync.StoredPlugins(ctx, backing, options)
 	if err != nil {
 		return err
 	}
-	if len(stored) == 0 {
+	if len(lists) == 0 {
 		return fmt.Errorf("the store has no plugin list yet; push from a machine that has Dalamud set up")
 	}
 
@@ -269,39 +282,130 @@ func plugins(ctx context.Context, backing store.Store, options sync.Options) err
 		return err
 	}
 
-	var missing, disabled []string
-	for _, plugin := range stored {
-		switch {
-		case !installed[plugin.InternalName] && plugin.IsEnabled:
-			missing = append(missing, plugin.InternalName)
-		case !installed[plugin.InternalName]:
-			disabled = append(disabled, plugin.InternalName)
+	devices := make([]string, 0, len(lists))
+	for device := range lists {
+		devices = append(devices, device)
+	}
+	sort.Strings(devices)
+
+	// What every other machine runs, so "missing" means missing from here and
+	// not merely absent from one other machine's list.
+	elsewhere := map[string]bool{}
+	for device, list := range lists {
+		if device == options.Device {
+			continue
+		}
+		for _, plugin := range list {
+			if plugin.IsEnabled {
+				elsewhere[plugin.InternalName] = true
+			}
 		}
 	}
 
-	fmt.Printf("stored list: %d plugins, %d installed here\n", len(stored), len(installed))
+	fmt.Printf("installed here: %d\n", len(installed))
+	for _, device := range devices {
+		enabled := 0
+		for _, plugin := range lists[device] {
+			if plugin.IsEnabled {
+				enabled++
+			}
+		}
+
+		here := ""
+		if device == options.Device {
+			here = " (this machine, as of its last push)"
+		}
+		fmt.Printf("  %-16s %d listed, %d enabled%s\n", device, len(lists[device]), enabled, here)
+	}
+
+	var missing []string
+	for name := range elsewhere {
+		if !installed[name] {
+			missing = append(missing, name)
+		}
+	}
+	sort.Strings(missing)
 
 	if len(missing) > 0 {
-		fmt.Printf("\nmissing (enabled elsewhere): %d\n", len(missing))
+		fmt.Printf("\nenabled elsewhere, not installed here: %d\n", len(missing))
 		for _, name := range missing {
 			fmt.Println("  " + name)
 		}
-		fmt.Println("\nInstall them from Dalamud's plugin installer — the custom repositories")
-		fmt.Println("they come from are already synced. Their settings are waiting too.")
+		fmt.Println("\nInstall them from Dalamud's plugin installer — the repositories they")
+		fmt.Println("come from are already synced, and their settings are waiting too.")
+	} else {
+		fmt.Println("\nnothing enabled elsewhere is missing here.")
 	}
 
-	if len(disabled) > 0 {
-		fmt.Printf("\nmissing, but switched off where the list came from: %d\n", len(disabled))
-		for _, name := range disabled {
-			fmt.Println("  " + name)
+	if !all {
+		fmt.Println("\n--all lists every plugin and where it is.")
+		return nil
+	}
+
+	// The whole picture: one row per plugin, so "what does the other machine
+	// have that I do not" and the reverse are both answerable without adding up
+	// two lists by hand.
+	names := map[string]bool{}
+	for name := range installed {
+		names[name] = true
+	}
+	for _, list := range lists {
+		for _, plugin := range list {
+			names[plugin.InternalName] = true
 		}
 	}
 
-	if len(missing) == 0 && len(disabled) == 0 {
-		fmt.Println("nothing missing.")
+	ordered := make([]string, 0, len(names))
+	for name := range names {
+		ordered = append(ordered, name)
+	}
+	sort.Strings(ordered)
+
+	fmt.Printf("\n%-28s %-10s %s\n", "plugin", "here", "listed by")
+	for _, name := range ordered {
+		var listed []string
+		for _, device := range devices {
+			for _, plugin := range lists[device] {
+				if plugin.InternalName != name {
+					continue
+				}
+
+				mark := device
+				if !plugin.IsEnabled {
+					mark += " (off)"
+				}
+				listed = append(listed, mark)
+			}
+		}
+
+		where := "nowhere"
+		if len(listed) > 0 {
+			where = strings.Join(listed, ", ")
+		}
+
+		state := "missing"
+		if installed[name] {
+			state = "installed"
+		}
+
+		fmt.Printf("%-28s %-10s %s\n", name, state, where)
 	}
 
 	return nil
+}
+
+// Applied is the accepted sections in a stable order, since a map prints in
+// whatever order Go feels like and this is meant to be compared between machines.
+func applied(accept map[string]bool) []string {
+	var sections []string
+	for section, yes := range accept {
+		if yes {
+			sections = append(sections, section)
+		}
+	}
+	sort.Strings(sections)
+
+	return sections
 }
 
 func initialise(path string) error {

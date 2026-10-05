@@ -5,6 +5,7 @@ package manifest
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"strings"
 	"time"
 
 	"github.com/linusfr/ffxiv-sync/internal/policy"
@@ -60,6 +61,25 @@ func (e Entry) Stored() string {
 	}
 
 	return e.Hash
+}
+
+// DeviceKey is where a record about one machine goes: the enabled-plugin list,
+// which is a statement about that machine rather than something to copy onto
+// another. Stored per device so every machine's list survives, instead of each
+// push overwriting the last machine's answer.
+func DeviceKey(logical, device string) string {
+	return "devices/" + device + "/" + logical
+}
+
+// CutDevice returns the device and logical path of a per-device record.
+func CutDevice(key string) (device, logical string, ok bool) {
+	rest, ok := cut(key, "devices/")
+	if !ok {
+		return "", "", false
+	}
+
+	device, logical, ok = strings.Cut(rest, "/")
+	return device, logical, ok
 }
 
 // Mine reports whether an entry belongs to this machine's profile. Shared

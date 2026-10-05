@@ -390,13 +390,21 @@ func TestEmptyRepoListIsNotPushed(t *testing.T) {
 		t.Error("the stored repository list went missing")
 	}
 
-	// The plugin list is stored but never written back to a machine.
-	if _, ok := current.Entries["shared/dalamud/plugins.json"]; !ok {
-		t.Fatal("the plugin list was not stored")
+	// The plugin list is stored per machine and never written back to one.
+	if _, ok := current.Entries["devices/tower/dalamud/plugins.json"]; !ok {
+		t.Fatal("the plugin list was not stored for the machine that pushed it")
 	}
-	plugins, err := StoredPlugins(ctx, backing, fresh)
-	if err != nil || len(plugins) != 1 || plugins[0].InternalName != "BossMod" {
-		t.Fatalf("stored plugins = %+v, err %v", plugins, err)
+
+	lists, err := StoredPlugins(ctx, backing, fresh)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(lists["tower"]) != 1 || lists["tower"][0].InternalName != "BossMod" {
+		t.Fatalf("tower's list = %+v", lists["tower"])
+	}
+	// Two machines, two lists: the second does not overwrite the first.
+	if len(lists["newmachine"]) != 1 {
+		t.Errorf("the second machine's list is missing: %+v", lists)
 	}
 
 	target := Options{Roots: machine(t, "1280", "other", "hud"), Profile: "handheld", Device: "deck", Force: true}
