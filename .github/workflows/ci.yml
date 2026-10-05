@@ -72,7 +72,8 @@ jobs:
             os="${target%/*}"; arch="${target#*/}"
             out="dist/ffsync-$VERSION-$os-$arch"
             [ "$os" = "windows" ] && out="$out.exe"
-            GOOS="$os" GOARCH="$arch" go build -trimpath -ldflags="-s -w" -o "$out" ./cmd/ffsync
+            GOOS="$os" GOARCH="$arch" go build -trimpath \
+              -ldflags="-s -w -X main.version=$VERSION" -o "$out" ./cmd/ffsync
           done
           ls -l dist
 

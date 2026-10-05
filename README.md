@@ -25,7 +25,19 @@ it on `PATH`. Then:
 ffsync init      # writes a starter config, prints where
 ffsync status    # shows what was detected and what each direction would do
 ffsync plugins   # which plugins the store expects that this machine lacks
+ffsync version   # what is running; --check asks what the newest release is
+ffsync update    # replaces this binary with the newest release
 ```
+
+`ffsync update` exists because release assets carry their version in the name,
+so there is no stable URL to fetch and updating by hand means reading the
+releases page first. It downloads the build for this platform, moves the old
+binary aside and puts the new one in its place — which is also how it works on
+Windows, where a running executable can be renamed but not overwritten.
+
+A copy installed by a package manager is left alone: in the Nix store it is
+read-only by design, and replacing it would be undone by the next rebuild, so
+`update` says so and stops.
 
 The config directory is found automatically for XIVLauncher, XIVLauncher.Core,
 its flatpak, and XIV on Mac; `game_config` in the settings file overrides it.

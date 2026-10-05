@@ -10,14 +10,20 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 
 	"github.com/linusfr/ffxiv-sync/internal/config"
 	"github.com/linusfr/ffxiv-sync/internal/layout"
+	"github.com/linusfr/ffxiv-sync/internal/selfupdate"
 	"github.com/linusfr/ffxiv-sync/internal/store"
 	"github.com/linusfr/ffxiv-sync/internal/sync"
 )
+
+// Version is set at build time: go build -ldflags "-X main.version=1.2.0".
+// "dev" means a local build, which "update" refuses to replace.
+var version = "dev"
 
 const usage = `ffsync — carry FFXIV settings between machines
 
@@ -26,6 +32,8 @@ const usage = `ffsync — carry FFXIV settings between machines
   ffsync status    what is where, and what each direction would do
   ffsync plugins   which plugins the store expects that this machine lacks
                    (--all for every plugin and which machine lists it)
+  ffsync version   what this is, and whether a newer release exists
+  ffsync update    replace this binary with the newest release
   ffsync init      write a starter config
 
 Flags:
@@ -49,6 +57,7 @@ func run() error {
 	force := flags.Bool("force", false, "take this side in a conflict")
 	dryRun := flags.Bool("dry-run", false, "change nothing")
 	all := flags.Bool("all", false, "with plugins: every plugin and where it is")
+	check := flags.Bool("check", false, "with update: report what would be installed")
 
 	if err := flags.Parse(os.Args[1:]); err != nil {
 		return err
@@ -79,8 +88,13 @@ func run() error {
 		}
 	}
 
-	if command == "init" {
+	switch command {
+	case "init":
 		return initialise(path)
+	case "version":
+		return printVersion(context.Background(), *check)
+	case "update":
+		return update(context.Background(), *check)
 	}
 
 	settings, err := config.Load(path)
@@ -392,6 +406,76 @@ func plugins(ctx context.Context, backing store.Store, options sync.Options, all
 	}
 
 	return nil
+}
+
+// PrintVersion says what is running, and what is available when asked.
+func printVersion(ctx context.Context, check bool) error {
+	fmt.Printf("ffsync %s (%s/%s)\n", version, runtime.GOOS, runtime.GOARCH)
+
+	if path, err := selfupdate.Target(); err != nil {
+		fmt.Printf("binary   %s\n", path)
+		fmt.Printf("updates  not from here — %v\n", err)
+	} else {
+		fmt.Printf("binary   %s\n", path)
+	}
+
+	if !check {
+		fmt.Println("\n--check asks GitHub what the newest release is.")
+		return nil
+	}
+
+	release, err := latest(ctx)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("latest   %s\n", release.Tag)
+
+	return nil
+}
+
+// Update replaces the running binary, or explains why it will not.
+func update(ctx context.Context, check bool) error {
+	release, err := latest(ctx)
+	if err != nil {
+		return err
+	}
+
+	if release.Tag == version {
+		fmt.Printf("ffsync %s is the newest release.\n", version)
+		return nil
+	}
+
+	name, _, size, ok := release.Asset()
+	if !ok {
+		return fmt.Errorf("release %s has no build named %s", release.Tag, name)
+	}
+
+	fmt.Printf("%s → %s (%s, %.1f MiB)\n", version, release.Tag, name, float64(size)/(1<<20))
+	if check {
+		fmt.Println("--check only; nothing was downloaded.")
+		return nil
+	}
+
+	target, err := selfupdate.Target()
+	if err != nil {
+		return err
+	}
+	if err := selfupdate.Apply(ctx, release, target); err != nil {
+		return err
+	}
+
+	fmt.Printf("installed %s at %s\n", release.Tag, target)
+
+	return nil
+}
+
+func latest(ctx context.Context) (selfupdate.Release, error) {
+	release, err := selfupdate.Latest(ctx)
+	if err != nil {
+		return release, fmt.Errorf("asking GitHub for the newest release: %w", err)
+	}
+
+	return release, nil
 }
 
 // Applied is the accepted sections in a stable order, since a map prints in

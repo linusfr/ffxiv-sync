@@ -7,8 +7,8 @@
 # The four machines this has to run on.
 targets := "linux/amd64 windows/amd64 darwin/arm64 darwin/amd64"
 
-build:
-    go build -trimpath -o dist/ffsync ./cmd/ffsync
+build version="dev":
+    go build -trimpath -ldflags="-X main.version={{version}}" -o dist/ffsync ./cmd/ffsync
     go build -trimpath -o dist/ffsync-server ./cmd/ffsync-server
 
 # Cross-compile the client for every machine in the house
@@ -20,7 +20,8 @@ release-binaries version="dev":
       os="${target%/*}"; arch="${target#*/}"
       out="dist/ffsync-{{version}}-$os-$arch"
       [ "$os" = "windows" ] && out="$out.exe"
-      GOOS="$os" GOARCH="$arch" go build -trimpath -ldflags="-s -w" -o "$out" ./cmd/ffsync
+      GOOS="$os" GOARCH="$arch" go build -trimpath \
+        -ldflags="-s -w -X main.version={{version}}" -o "$out" ./cmd/ffsync
       echo "$out"
     done
 
