@@ -1,0 +1,21 @@
+# ffsync server. Blobs are content-addressed and the manifest is a pointer file,
+# so the volume is the whole state: back it up by copying it.
+services:
+  ffsync:
+    image: ghcr.io/linusfr/ffxiv-sync:latest
+    container_name: ffsync
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # 0.0.0.0 is the image default; stated because a bind to localhost inside
+      # a container means unreachable, and that is not obvious later.
+      FFSYNC_ADDR: "0.0.0.0:8771"
+      FFSYNC_DATA: /data
+      FFSYNC_KEEP: "20"
+    ports:
+      - "8771:8771"
+    volumes:
+      - ffsync:/data
+
+volumes:
+  ffsync:

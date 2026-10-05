@@ -5,6 +5,10 @@
 # A real settings file carries a token; the example in the README is enough.
 config.json
 
+# Real tokens live beside the examples, never in the repo.
+.env
+.envrc
+
 # AI context files
 CLAUDE.md
 AGENTS.md

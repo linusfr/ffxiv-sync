@@ -1,0 +1,5 @@
+# direnv: keeps the token out of the compose file and out of shell history.
+# Copy to .envrc, fill it in, then `direnv allow`.
+export FFSYNC_TOKEN=
+# For the client on this machine, if it talks to the server you just started:
+export FFSYNC_PASSPHRASE=

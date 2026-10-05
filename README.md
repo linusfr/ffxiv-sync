@@ -297,9 +297,12 @@ see which plugins are actually expected.
 Only needed if the machines do not share a folder.
 
 ```sh
-docker run -d -p 8771:8771 -v ffsync:/data \
-  -e FFSYNC_TOKEN=... ghcr.io/linusfr/ffxiv-sync:latest
+docker run -d --name ffsync -p 8771:8771 -v ffsync:/data \
+  -e FFSYNC_TOKEN="$(openssl rand -hex 24)" ghcr.io/linusfr/ffxiv-sync:latest
 ```
+
+Or `deploy/` in this repo: copy `.env.example` to `.env` (or `.envrc.example` to
+`.envrc` for direnv), put a token in it, `docker compose up -d`.
 
 | Variable | Default | |
 | --- | --- | --- |
@@ -308,8 +311,21 @@ docker run -d -p 8771:8771 -v ffsync:/data \
 | `FFSYNC_ADDR` | `0.0.0.0:8771` | listen address |
 | `FFSYNC_KEEP` | `20` | generations kept before old blobs are collected |
 
-It stores exactly what the `dir` backend does — content-addressed blobs and a
-generation-numbered manifest — so the two cannot drift apart.
+Check it answers, and that the token is doing its job:
+
+```sh
+curl -s localhost:8771/healthz                                  # ok
+curl -s -o /dev/null -w '%{http_code}\n' localhost:8771/v1/current   # 401
+curl -s -H "Authorization: Bearer $FFSYNC_TOKEN" localhost:8771/v1/current
+```
+
+Behind a reverse proxy, send the whole host straight through — there is no web
+interface, every caller is the CLI, and a CLI cannot follow a login redirect.
+`/healthz` is unauthenticated for exactly that reason, so a monitor can watch it.
+
+It stores what the `dir` backend does — content-addressed blobs and a
+generation-numbered manifest — so the two cannot drift apart, and the volume is
+the entire state: back it up by copying it.
 
 ## Keeping it current
 
