@@ -171,11 +171,18 @@ func Example(device string) *Config {
 		Device:  device,
 		Profile: "desktop",
 		Store:   Store{Kind: "dir", Path: ""},
-		// Listed at their defaults so the file shows what can be changed.
+		// Both halves listed at their defaults, so the file itself shows that
+		// sharing a machine setting is two decisions: this machine publishing
+		// it, and the machine at the other end taking it. Nothing here changes
+		// behaviour until a value does.
 		Cfg: map[string]string{
 			"Graphics Settings":      "local",
 			"Graphics Settings DX11": "local",
 			"GamePad Settings":       "local",
+		},
+		CfgApply: map[string]bool{
+			"Graphics Settings":      false,
+			"Graphics Settings DX11": false,
 		},
 	}
 }

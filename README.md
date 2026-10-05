@@ -84,13 +84,10 @@ while pgrep -f ffxiv_dx11.exe >/dev/null; do sleep 10; done
 ffsync push
 ```
 
-On a machine managed by Nix or home-manager, the same three steps are worth
-packaging instead: a `writeShellScriptBin` for the launch and one each for a
-manual pull and push, plus `xdg.desktopEntries` so they appear in the launcher
-beside the game. Have the manual two refuse while `ffxiv_dx11.exe` is running —
-the game loads its settings at launch and rewrites them at exit, so a pull then
-is silently undone and a push uploads the previous session — and report through
-notifications, since a launcher entry has no terminal to print to.
+On Nix or home-manager, package the three steps instead (`writeShellScriptBin`
+plus `xdg.desktopEntries`). Make the manual pull and push refuse while
+`ffxiv_dx11.exe` runs: the game rewrites its settings at exit, so a pull is
+undone and a push uploads the previous session.
 
 ### Steam Deck
 
@@ -137,15 +134,13 @@ tasklist /fi "imagename eq ffxiv_dx11.exe" | find /i "ffxiv_dx11.exe" >nul && go
 "%FFSYNC%" push || pause
 ```
 
-Three things that bite here. The launcher is behind `current\` on Velopack
-installs. The loop has to watch *both* processes, or a slow login, an OTP prompt
-or a patch means the game is not up at the first check and the push happens
-before the session. And `ffsync.exe` is called by full path, because a shortcut
-launched from Explorer may not see a freshly changed `PATH`.
+Why each oddity: the launcher sits behind `current\` on Velopack installs; the
+loop watches *both* processes, because a slow login or a patch means the game is
+not up at the first check; `ffsync.exe` is called by full path, because a
+shortcut launched from Explorer may not see a changed `PATH`.
 
-A `.bat` cannot be pinned to the taskbar. Make a shortcut with target
-`cmd.exe /c "…\ffxiv.bat"`, set it to start minimised, give it XIVLauncher's
-icon, and pin that from the Start Menu.
+A `.bat` cannot be pinned. Make a shortcut to `cmd.exe /c "…\ffxiv.bat"`, start
+minimised, XIVLauncher's icon, pin that.
 
 ## What travels
 
@@ -272,17 +267,15 @@ In this order, or the first sync will fight you:
 
 ## Windows: a trap worth knowing
 
-Packaged (MSIX/Store) applications — including Claude Desktop — redirect
-everything they and their child processes write under `%AppData%` and
-`%LOCALAPPDATA%` into a private per-package folder. Installed from inside such an
-app, ffsync, its config and the wrapper all appear to exist and are invisible to
-Explorer, PowerShell and the Start Menu shortcut. Installing to
-`%USERPROFILE%\ffsync` avoids it entirely; otherwise do the install from an
-ordinary PowerShell.
+Packaged (MSIX/Store) applications redirect everything they and their child
+processes write under `%AppData%` and `%LOCALAPPDATA%` into a private
+per-package folder. Install ffsync from inside one and the binary, config and
+wrapper exist for that app and for nothing else — Explorer, PowerShell and the
+Start Menu shortcut see none of it. Install to `%USERPROFILE%\ffsync`, or from
+an ordinary PowerShell.
 
-The wrapper also only helps if it is what you actually launch. Replace the
-XIVLauncher shortcut you use with the one pointing at `ffxiv.bat` — starting the
-launcher directly means nothing pushes when you are done.
+Replace the XIVLauncher shortcut you actually use with the one pointing at
+`ffxiv.bat`; starting the launcher directly pushes nothing.
 
 ## Conflicts
 
@@ -326,14 +319,13 @@ ffsync update            # replace this binary with it
 ```
 
 Release assets carry their version in the name, so there is no stable URL to
-fetch; `update` finds the right one, checks the size it downloaded against what
-the API reported, then renames the old binary aside and the new one into place.
-That order is what lets it work on Windows, where a running executable can be
-renamed but not overwritten.
+fetch. `update` picks the build for this platform, checks the downloaded size
+against the API's, then renames the old binary aside and the new one in — the
+only order Windows allows on a running executable.
 
-A copy installed by a package manager is left alone — in the Nix store it is
-read-only by design and a replacement would be undone by the next rebuild — so
-`update` says where the binary came from and stops.
+A packaged copy is left alone: in the Nix store it is read-only and a rebuild
+would undo the replacement, so `update` says where the binary came from and
+stops.
 
 ## Building
 

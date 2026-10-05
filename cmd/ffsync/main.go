@@ -40,6 +40,12 @@ Flags:
   --config PATH    settings file (default: the platform's config directory)
   --force          in a conflict, take this side instead of reporting it
   --dry-run        say what would happen, change nothing
+  --check          with version or update: report, download nothing
+  --all            with plugins: every plugin and which machine lists it
+
+What travels is set in the config file, not here: "cfg" is what this machine
+shares, "cfg_apply" what it takes. "ffsync status" prints both. Graphics,
+resolution and input hardware stay local until named on both ends.
 `
 
 func main() {
@@ -89,6 +95,10 @@ func run() error {
 	}
 
 	switch command {
+	// Typed often enough to be worth answering rather than rejecting.
+	case "help":
+		flags.Usage()
+		return nil
 	case "init":
 		return initialise(path)
 	case "version":
