@@ -29,15 +29,7 @@ ffsync version   # what is running; --check asks what the newest release is
 ffsync update    # replaces this binary with the newest release
 ```
 
-`ffsync update` exists because release assets carry their version in the name,
-so there is no stable URL to fetch and updating by hand means reading the
-releases page first. It downloads the build for this platform, moves the old
-binary aside and puts the new one in its place — which is also how it works on
-Windows, where a running executable can be renamed but not overwritten.
-
-A copy installed by a package manager is left alone: in the Nix store it is
-read-only by design, and replacing it would be undone by the next rebuild, so
-`update` says so and stops.
+Updating later is `ffsync update`; see **Keeping it current** below.
 
 The config directory is found automatically for XIVLauncher, XIVLauncher.Core,
 its flatpak, and XIV on Mac; `game_config` in the settings file overrides it.
@@ -79,13 +71,26 @@ the shared set does.
 
 ```sh
 #!/usr/bin/env sh
-set -e
-ffsync pull
-XIVLauncher.Core
-# The launcher exits before the game does, so wait for the game itself.
+# A pull that reports conflicts exits non-zero, and a store that is down should
+# not stop anyone playing — so the game starts either way.
+ffsync pull || echo "ffsync: pull failed, starting with this machine's settings" >&2
+
+XIVLauncher.Core "$@"
+
+# The launcher exits as soon as the game is up, so waiting on it would push the
+# settings from the previous session.
 while pgrep -f ffxiv_dx11.exe >/dev/null; do sleep 10; done
+
 ffsync push
 ```
+
+On a machine managed by Nix or home-manager, the same three steps are worth
+packaging instead: a `writeShellScriptBin` for the launch and one each for a
+manual pull and push, plus `xdg.desktopEntries` so they appear in the launcher
+beside the game. Have the manual two refuse while `ffxiv_dx11.exe` is running —
+the game loads its settings at launch and rewrites them at exit, so a pull then
+is silently undone and a push uploads the previous session — and report through
+notifications, since a launcher entry has no terminal to print to.
 
 ### Steam Deck
 
@@ -103,10 +108,11 @@ ffsync finds on its own.
 
 ```sh
 #!/usr/bin/env zsh
-set -e
-ffsync pull
+ffsync pull || echo "ffsync: pull failed, starting with this machine's settings" >&2
+
 open -W -a "XIV on Mac"
 while pgrep -f ffxiv_dx11.exe >/dev/null; do sleep 10; done
+
 ffsync push
 ```
 
@@ -218,6 +224,15 @@ stays off, and the rest of that file is left alone. The plugins themselves are
 not synced: with the repositories present, a new machine installs each one from
 Dalamud's installer, and its settings are already waiting for it.
 
+Each machine also stores which plugins it has enabled, under its own device
+name, so the lists can differ without overwriting each other. They are read
+back, never written to a machine:
+
+```sh
+ffsync plugins         # what other machines run that this one lacks
+ffsync plugins --all   # every plugin, where it is installed, who lists it
+```
+
 ## Encryption
 
 Plugin settings hold API tokens and push keys, and a store is a folder on
@@ -302,6 +317,23 @@ docker run -d -p 8771:8771 -v ffsync:/data \
 
 It stores exactly what the `dir` backend does — content-addressed blobs and a
 generation-numbered manifest — so the two cannot drift apart.
+
+## Keeping it current
+
+```sh
+ffsync version --check   # what is running, and the newest release
+ffsync update            # replace this binary with it
+```
+
+Release assets carry their version in the name, so there is no stable URL to
+fetch; `update` finds the right one, checks the size it downloaded against what
+the API reported, then renames the old binary aside and the new one into place.
+That order is what lets it work on Windows, where a running executable can be
+renamed but not overwritten.
+
+A copy installed by a package manager is left alone — in the Nix store it is
+read-only by design and a replacement would be undone by the next rebuild — so
+`update` says where the binary came from and stops.
 
 ## Building
 
