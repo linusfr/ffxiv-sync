@@ -1,10 +1,10 @@
-## 1.2.0 (2026-10-05)
+## 1.3.0 (2026-10-05)
 
 #### Feature
 
-* keep Penumbra local and store plugin lists per machine (38cf3db6)
+* add version and update (0044d66b)
 
 #### Chores
 
-* changelog 1.1.0 [skip ci] (41a1eced)
+* changelog 1.2.0 [skip ci] (0a3a359a)
 
