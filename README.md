@@ -71,6 +71,8 @@ the shared set does.
 
 ```sh
 #!/usr/bin/env sh
+ffsync update   # no-op when current, when offline, or when packaged
+
 # A pull that reports conflicts exits non-zero, and a store that is down should
 # not stop anyone playing — so the game starts either way.
 ffsync pull || echo "ffsync: pull failed, starting with this machine's settings" >&2
@@ -95,7 +97,7 @@ Same script, saved on the Deck and marked executable. In Steam, add it as a
 non-Steam game, or set the launch options of the existing XIVLauncher entry to:
 
 ```text
-sh -c "$HOME/.local/bin/ffsync pull; %command%; while pgrep -f ffxiv_dx11.exe >/dev/null; do sleep 10; done; $HOME/.local/bin/ffsync push"
+sh -c "$HOME/.local/bin/ffsync update; $HOME/.local/bin/ffsync pull; %command%; while pgrep -f ffxiv_dx11.exe >/dev/null; do sleep 10; done; $HOME/.local/bin/ffsync push"
 ```
 
 The flatpak keeps its config under `~/.var/app/dev.goats.xivlauncher`, which
@@ -105,6 +107,8 @@ ffsync finds on its own.
 
 ```sh
 #!/usr/bin/env zsh
+ffsync update   # no-op when current, when offline, or when packaged
+
 ffsync pull || echo "ffsync: pull failed, starting with this machine's settings" >&2
 
 open -W -a "XIV on Mac"
@@ -122,6 +126,10 @@ ffsync push
 setlocal
 set FFSYNC=%LOCALAPPDATA%\ffsync\ffsync.exe
 
+rem Update before the pull: a release can change what a pull writes, and this is
+rem the one moment the binary is not in use.
+"%FFSYNC%" update
+
 "%FFSYNC%" pull || echo ffsync: pull failed, starting anyway
 
 start "" "%LOCALAPPDATA%\XIVLauncher\current\XIVLauncher.exe"
@@ -137,7 +145,9 @@ tasklist /fi "imagename eq ffxiv_dx11.exe" | find /i "ffxiv_dx11.exe" >nul && go
 Why each oddity: the launcher sits behind `current\` on Velopack installs; the
 loop watches *both* processes, because a slow login or a patch means the game is
 not up at the first check; `ffsync.exe` is called by full path, because a
-shortcut launched from Explorer may not see a changed `PATH`.
+shortcut launched from Explorer may not see a changed `PATH`. `update` is not
+guarded — it prints what it did and carries on when GitHub is unreachable or the
+copy is packaged.
 
 A `.bat` cannot be pinned. Make a shortcut to `cmd.exe /c "…\ffxiv.bat"`, start
 minimised, XIVLauncher's icon, pin that.

@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -444,10 +445,21 @@ func printVersion(ctx context.Context, check bool) error {
 }
 
 // Update replaces the running binary, or explains why it will not.
+//
+// Run from a launch wrapper, so the ordinary reasons not to update — already
+// current, no network, a copy a package manager owns — are reported and shrugged
+// off. Only failing part-way through a replacement is an error.
 func update(ctx context.Context, check bool) error {
+	target, targetErr := selfupdate.Target()
+	if errors.Is(targetErr, selfupdate.ErrManaged) {
+		fmt.Printf("ffsync %s: %v\n", version, targetErr)
+		return nil
+	}
+
 	release, err := latest(ctx)
 	if err != nil {
-		return err
+		fmt.Fprintf(os.Stderr, "ffsync: %v — keeping %s\n", err, version)
+		return nil
 	}
 
 	if release.Tag == version {
@@ -466,9 +478,8 @@ func update(ctx context.Context, check bool) error {
 		return nil
 	}
 
-	target, err := selfupdate.Target()
-	if err != nil {
-		return err
+	if targetErr != nil {
+		return targetErr
 	}
 	if err := selfupdate.Apply(ctx, release, target); err != nil {
 		return err
